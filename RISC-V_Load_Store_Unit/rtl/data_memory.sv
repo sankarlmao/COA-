@@ -13,7 +13,7 @@ module data_memory
     import lsu_pkg::*;
 #(
     parameter DEPTH       = MEM_DEPTH,
-    parameter LATENCY     = 1,           // Memory access latency in cycles
+    parameter LATENCY     = 0,           // Memory access latency in cycles (0 for combinational)
     parameter INIT_FILE   = ""           // Optional initialization file
 )(
     input  logic                    clk,

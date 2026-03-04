@@ -51,9 +51,14 @@ module store_buffer
 );
 
     //==========================================================================
-    // Internal Signals
+    // Internal Signals - Using separate arrays instead of struct array
     //==========================================================================
-    store_buffer_entry_t buffer [DEPTH];
+    logic                   buf_valid     [DEPTH];
+    logic                   buf_committed [DEPTH];
+    logic [ADDR_WIDTH-1:0]  buf_addr      [DEPTH];
+    logic [DATA_WIDTH-1:0]  buf_data      [DEPTH];
+    logic [3:0]             buf_be        [DEPTH];
+    
     logic [$clog2(DEPTH)-1:0] head_ptr, tail_ptr;
     logic [$clog2(DEPTH):0] count;
     logic [$clog2(DEPTH):0] committed_count;
@@ -71,7 +76,11 @@ module store_buffer
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             for (int i = 0; i < DEPTH; i++) begin
-                buffer[i] <= '0;
+                buf_valid[i]     <= 1'b0;
+                buf_committed[i] <= 1'b0;
+                buf_addr[i]      <= '0;
+                buf_data[i]      <= '0;
+                buf_be[i]        <= '0;
             end
             head_ptr <= '0;
             tail_ptr <= '0;
@@ -80,8 +89,8 @@ module store_buffer
         end else if (flush_i) begin
             // Flush uncommitted entries only
             for (int i = 0; i < DEPTH; i++) begin
-                if (!buffer[i].committed) begin
-                    buffer[i] <= '0;
+                if (!buf_committed[i]) begin
+                    buf_valid[i] <= 1'b0;
                 end
             end
             // Reset tail pointer but keep committed entries
@@ -90,25 +99,25 @@ module store_buffer
         end else begin
             // Allocation of new store request
             if (alloc_valid_i && alloc_ready_o) begin
-                buffer[tail_ptr].valid     <= 1'b1;
-                buffer[tail_ptr].committed <= 1'b0;
-                buffer[tail_ptr].addr      <= alloc_addr_i;
-                buffer[tail_ptr].data      <= alloc_data_i;
-                buffer[tail_ptr].be        <= alloc_be_i;
+                buf_valid[tail_ptr]     <= 1'b1;
+                buf_committed[tail_ptr] <= 1'b0;
+                buf_addr[tail_ptr]      <= alloc_addr_i;
+                buf_data[tail_ptr]      <= alloc_data_i;
+                buf_be[tail_ptr]        <= alloc_be_i;
                 tail_ptr <= tail_ptr + 1;
                 count <= count + 1;
             end
             
             // Commit oldest uncommitted store
-            if (commit_i && buffer[head_ptr + committed_count[$clog2(DEPTH)-1:0]].valid) begin
-                buffer[head_ptr + committed_count[$clog2(DEPTH)-1:0]].committed <= 1'b1;
+            if (commit_i && count > committed_count) begin
+                buf_committed[head_ptr + committed_count[$clog2(DEPTH)-1:0]] <= 1'b1;
                 committed_count <= committed_count + 1;
             end
             
             // Dequeue committed store after memory write
             if (mem_req_valid_o && mem_req_ready_i) begin
-                buffer[head_ptr].valid <= 1'b0;
-                buffer[head_ptr].committed <= 1'b0;
+                buf_valid[head_ptr] <= 1'b0;
+                buf_committed[head_ptr] <= 1'b0;
                 head_ptr <= head_ptr + 1;
                 count <= count - 1;
                 committed_count <= committed_count - 1;
@@ -119,10 +128,10 @@ module store_buffer
     //==========================================================================
     // Memory Write Request (FIFO Order for Committed Stores)
     //==========================================================================
-    assign mem_req_valid_o = buffer[head_ptr].valid && buffer[head_ptr].committed;
-    assign mem_req_addr_o  = buffer[head_ptr].addr;
-    assign mem_req_data_o  = buffer[head_ptr].data;
-    assign mem_req_be_o    = buffer[head_ptr].be;
+    assign mem_req_valid_o = buf_valid[head_ptr] && buf_committed[head_ptr];
+    assign mem_req_addr_o  = buf_addr[head_ptr];
+    assign mem_req_data_o  = buf_data[head_ptr];
+    assign mem_req_be_o    = buf_be[head_ptr];
 
     //==========================================================================
     // Store-to-Load Forwarding Logic
@@ -137,17 +146,17 @@ module store_buffer
             // Search from newest entry to oldest
             for (int i = DEPTH-1; i >= 0; i--) begin
                 logic [$clog2(DEPTH)-1:0] idx;
-                idx = (tail_ptr - 1 - i) % DEPTH;
+                idx = (tail_ptr - 1 - i[$clog2(DEPTH)-1:0]);
                 
-                if (buffer[idx].valid &&
-                    buffer[idx].addr[ADDR_WIDTH-1:2] == fwd_check_addr_i[ADDR_WIDTH-1:2]) begin
+                if (buf_valid[idx] &&
+                    buf_addr[idx][ADDR_WIDTH-1:2] == fwd_check_addr_i[ADDR_WIDTH-1:2]) begin
                     
                     fwd_hit_o = 1'b1;
                     
                     // Check if store covers all requested bytes
-                    if ((buffer[idx].be & fwd_check_be_i) == fwd_check_be_i) begin
+                    if ((buf_be[idx] & fwd_check_be_i) == fwd_check_be_i) begin
                         fwd_hit_full_o = 1'b1;
-                        fwd_data_o = buffer[idx].data;
+                        fwd_data_o = buf_data[idx];
                     end
                 end
             end

@@ -112,13 +112,13 @@ help:
 # Icarus Verilog Targets
 #------------------------------------------------------------------------------
 .PHONY: compile
-compile: $(SIM_DIR)
+compile: create_sim_dir
 	@echo "Compiling with Icarus Verilog..."
 	$(IVERILOG) $(IVERILOG_FLAGS) -o $(SIM_EXEC) $(ALL_SOURCES)
 	@echo "Compilation successful: $(SIM_EXEC)"
 
 .PHONY: sim
-sim: $(SIM_EXEC)
+sim:
 	@echo "Running simulation..."
 	cd $(SIM_DIR) && $(VVP) ../$(SIM_EXEC) | tee simulation.log
 	@echo "Simulation complete. Log: $(SIM_DIR)/simulation.log"
@@ -127,15 +127,9 @@ sim: $(SIM_EXEC)
 run: compile sim
 
 .PHONY: wave
-wave: $(SIM_DIR)/lsu_tb.vcd
+wave:
 	@echo "Opening waveform viewer..."
 	$(GTKWAVE) $(SIM_DIR)/lsu_tb.vcd &
-
-$(SIM_EXEC): $(ALL_SOURCES)
-	@make compile
-
-$(SIM_DIR)/lsu_tb.vcd: $(SIM_EXEC)
-	@make sim
 
 #------------------------------------------------------------------------------
 # Verilator Targets
@@ -174,7 +168,8 @@ lint: verilate
 #------------------------------------------------------------------------------
 # Directory Creation
 #------------------------------------------------------------------------------
-$(SIM_DIR):
+.PHONY: create_sim_dir
+create_sim_dir:
 	@mkdir -p $(SIM_DIR)
 
 #------------------------------------------------------------------------------

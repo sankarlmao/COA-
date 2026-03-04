@@ -1,0 +1,88 @@
+
+
+╔═══════════════════════════════════════════════════════════╗
+║       RISC-V Load Store Unit - Testbench                  ║
+║                   COA Project                             ║
+╚═══════════════════════════════════════════════════════════╝
+
+
+
+[0] Applying reset...
+VCD info: dumpfile lsu_tb.vcd opened for output.
+[65000] Reset complete
+
+
+========== TEST 1: Basic Word Store/Load ==========
+[65000] STORE WORD: addr=0x00000100, data=0xdeadbeef
+[95000] LOAD WORD: addr=0x00000100, rd=x1
+[145000] LOAD COMPLETE: data=0xdeadbeef, rd=x1
+[PASS] Word Store/Load: Expected=0xdeadbeef, Got=0xdeadbeef
+[145000] STORE WORD: addr=0x00000104, data=0xcafebabe
+[175000] LOAD WORD: addr=0x00000104, rd=x2
+[225000] LOAD COMPLETE: data=0xcafebabe, rd=x2
+[PASS] Word Store/Load 2: Expected=0xcafebabe, Got=0xcafebabe
+
+========== TEST 2: Byte Store/Load ==========
+[225000] STORE BYTE: addr=0x00000200, data=0xaa
+[255000] STORE BYTE: addr=0x00000201, data=0xbb
+[285000] STORE BYTE: addr=0x00000202, data=0xcc
+[315000] STORE BYTE: addr=0x00000203, data=0xdd
+[345000] LOAD WORD: addr=0x00000200, rd=x3
+[395000] LOAD COMPLETE: data=0xddccbbaa, rd=x3
+[PASS] Byte->Word: Expected=0xddccbbaa, Got=0xddccbbaa
+[395000] LOAD BYTE: addr=0x00000200, rd=x4
+[445000] LOAD COMPLETE: data=0xffffffaa (sign-extended)
+[PASS] Load Byte 0: Expected=0xffffffaa, Got=0xffffffaa
+[445000] STORE BYTE: addr=0x00000210, data=0x7f
+[475000] LOAD BYTE: addr=0x00000210, rd=x5
+[525000] LOAD COMPLETE: data=0x0000007f (sign-extended)
+[PASS] Load Byte Positive: Expected=0x0000007f, Got=0x0000007f
+
+========== TEST 3: Halfword Store/Load ==========
+[525000] STORE HALF: addr=0x00000300, data=0x1234
+[555000] STORE HALF: addr=0x00000302, data=0x5678
+[585000] LOAD WORD: addr=0x00000300, rd=x6
+[635000] LOAD COMPLETE: data=0x56781234, rd=x6
+[PASS] Half->Word: Expected=0x56781234, Got=0x56781234
+[635000] LOAD HALF: addr=0x00000300, rd=x7
+[685000] LOAD COMPLETE: data=0x00001234 (sign-extended)
+[PASS] Load Halfword: Expected=0x00001234, Got=0x00001234
+[685000] STORE HALF: addr=0x00000310, data=0xffff
+[715000] LOAD HALF: addr=0x00000310, rd=x8
+[765000] LOAD COMPLETE: data=0xffffffff (sign-extended)
+[PASS] Load Halfword Negative: Expected=0xffffffff, Got=0xffffffff
+
+========== TEST 4: Address with Offset ==========
+[765000] STORE WORD: addr=0x00000400, data=0x11112222
+[PASS] Base+Offset: Expected=0x11112222, Got=0x11112222
+
+========== TEST 5: Multiple Operations ==========
+[845000] STORE WORD: addr=0x00000500, data=0x00000001
+[875000] STORE WORD: addr=0x00000504, data=0x00000002
+[905000] STORE WORD: addr=0x00000508, data=0x00000003
+[935000] STORE WORD: addr=0x0000050c, data=0x00000004
+[965000] LOAD WORD: addr=0x00000500, rd=x10
+[1015000] LOAD COMPLETE: data=0x00000001, rd=x10
+[PASS] Multi Op 1: Expected=0x00000001, Got=0x00000001
+[1015000] LOAD WORD: addr=0x00000504, rd=x11
+[1065000] LOAD COMPLETE: data=0x00000002, rd=x11
+[PASS] Multi Op 2: Expected=0x00000002, Got=0x00000002
+[1065000] LOAD WORD: addr=0x00000508, rd=x12
+[1115000] LOAD COMPLETE: data=0x00000003, rd=x12
+[PASS] Multi Op 3: Expected=0x00000003, Got=0x00000003
+[1115000] LOAD WORD: addr=0x0000050c, rd=x13
+[1165000] LOAD COMPLETE: data=0x00000004, rd=x13
+[PASS] Multi Op 4: Expected=0x00000004, Got=0x00000004
+
+
+╔═══════════════════════════════════════════════════════════╗
+║                    TEST SUMMARY                           ║
+╠═══════════════════════════════════════════════════════════╣
+║  Total Tests:   13                                        ║
+║  Passed:        13                                        ║
+║  Failed:         0                                        ║
+╚═══════════════════════════════════════════════════════════╝
+
+*** ALL TESTS PASSED ***
+
+tb/lsu_tb.sv:477: $finish called at 1265000 (1ps)

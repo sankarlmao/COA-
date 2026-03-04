@@ -176,9 +176,19 @@ package lsu_pkg;
         logic [7:0]  byte_data;
         logic [15:0] half_data;
         
-        // Extract byte/halfword based on address LSBs
-        byte_data = data[addr_lsb*8 +: 8];
-        half_data = data[addr_lsb[1]*16 +: 16];
+        // Extract byte based on address LSBs
+        case (addr_lsb)
+            2'b00: byte_data = data[7:0];
+            2'b01: byte_data = data[15:8];
+            2'b10: byte_data = data[23:16];
+            2'b11: byte_data = data[31:24];
+        endcase
+        
+        // Extract halfword based on address LSB[1]
+        case (addr_lsb[1])
+            1'b0: half_data = data[15:0];
+            1'b1: half_data = data[31:16];
+        endcase
         
         case (funct3)
             FUNCT3_LB:  return {{24{byte_data[7]}}, byte_data};

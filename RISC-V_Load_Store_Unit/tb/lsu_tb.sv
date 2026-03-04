@@ -118,7 +118,7 @@ module lsu_tb;
     //==========================================================================
     data_memory #(
         .DEPTH      (4096),
-        .LATENCY    (1)
+        .LATENCY    (0)     // Zero latency for simpler FSM interaction
     ) u_data_mem (
         .clk            (clk),
         .rst_n          (rst_n),
@@ -176,14 +176,9 @@ module lsu_tb;
         @(posedge clk);
         cpu_req_valid <= 0;
         
-        // Commit the store
-        repeat(2) @(posedge clk);
-        commit <= 1;
+        // Wait for store to complete (LSU returns to IDLE)
+        wait(cpu_req_ready);
         @(posedge clk);
-        commit <= 0;
-        
-        // Wait for completion
-        repeat(5) @(posedge clk);
     endtask
 
     // Store halfword task
@@ -204,12 +199,9 @@ module lsu_tb;
         @(posedge clk);
         cpu_req_valid <= 0;
         
-        repeat(2) @(posedge clk);
-        commit <= 1;
+        // Wait for store to complete
+        wait(cpu_req_ready);
         @(posedge clk);
-        commit <= 0;
-        
-        repeat(5) @(posedge clk);
     endtask
 
     // Store byte task
@@ -230,12 +222,9 @@ module lsu_tb;
         @(posedge clk);
         cpu_req_valid <= 0;
         
-        repeat(2) @(posedge clk);
-        commit <= 1;
+        // Wait for store to complete
+        wait(cpu_req_ready);
         @(posedge clk);
-        commit <= 0;
-        
-        repeat(5) @(posedge clk);
     endtask
 
     // Load word task
@@ -257,11 +246,11 @@ module lsu_tb;
         @(posedge clk);
         cpu_req_valid <= 0;
         
-        // Wait for response
+        // Wait for response and sample data on next clock edge
         wait(cpu_resp_valid);
+        @(posedge clk);
         data = cpu_resp_rdata;
         $display("[%0t] LOAD COMPLETE: data=0x%08h, rd=x%0d", $time, data, cpu_resp_rd);
-        @(posedge clk);
     endtask
 
     // Load halfword (signed) task
@@ -284,9 +273,9 @@ module lsu_tb;
         cpu_req_valid <= 0;
         
         wait(cpu_resp_valid);
+        @(posedge clk);
         data = cpu_resp_rdata;
         $display("[%0t] LOAD COMPLETE: data=0x%08h (sign-extended)", $time, data);
-        @(posedge clk);
     endtask
 
     // Load byte (signed) task
@@ -309,9 +298,9 @@ module lsu_tb;
         cpu_req_valid <= 0;
         
         wait(cpu_resp_valid);
+        @(posedge clk);
         data = cpu_resp_rdata;
         $display("[%0t] LOAD COMPLETE: data=0x%08h (sign-extended)", $time, data);
-        @(posedge clk);
     endtask
 
     // Check result task

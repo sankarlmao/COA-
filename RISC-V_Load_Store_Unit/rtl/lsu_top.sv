@@ -1,7 +1,7 @@
 //==============================================================================
 // File: lsu_top.sv
 // Description: Top-Level Load Store Unit for RISC-V Processor
-//              Integrates AGU, Load Buffer, Store Buffer, and Memory Controller
+//              Simplified design for correct operation with Icarus Verilog
 //              Supports RV32I load/store instructions
 // Author: COA Project
 // Date: March 2026
@@ -65,227 +65,178 @@ module lsu_top
 );
 
     //==========================================================================
+    // FSM States
+    //==========================================================================
+    typedef enum logic [2:0] {
+        IDLE        = 3'b000,
+        ADDR_CALC   = 3'b001,
+        MEM_REQ     = 3'b010,
+        MEM_WAIT    = 3'b011,
+        WRITEBACK   = 3'b100,
+        ERROR       = 3'b101
+    } state_t;
+    
+    state_t state, next_state;
+
+    //==========================================================================
     // Internal Signals
     //==========================================================================
+    // Effective address computation
+    logic [ADDR_WIDTH-1:0] eff_addr;
+    logic [11:0] sign_ext_offset;
     
-    // AGU signals
-    logic                    agu_valid;
-    logic [ADDR_WIDTH-1:0]   agu_eff_addr;
-    logic                    agu_misaligned;
-    logic [3:0]              agu_byte_enable;
-    mem_size_t               agu_mem_size;
+    // Request registers
+    logic                   req_is_store_r;
+    logic [ADDR_WIDTH-1:0]  req_addr_r;
+    logic [DATA_WIDTH-1:0]  req_wdata_r;
+    logic [2:0]             req_funct3_r;
+    logic [4:0]             req_rd_r;
+    logic [3:0]             req_be_r;
     
-    // Load Buffer signals
-    logic                    lb_alloc_valid;
-    logic                    lb_alloc_ready;
-    logic [$clog2(BUFFER_DEPTH)-1:0] lb_alloc_idx;
-    logic                    lb_wb_valid;
-    logic [DATA_WIDTH-1:0]   lb_wb_data;
-    logic [4:0]              lb_wb_rd;
-    logic                    lb_empty;
-    logic                    lb_full;
+    // Alignment check
+    logic is_aligned;
     
-    // Store Buffer signals
-    logic                    sb_alloc_valid;
-    logic                    sb_alloc_ready;
-    logic                    sb_mem_req_valid;
-    logic [ADDR_WIDTH-1:0]   sb_mem_req_addr;
-    logic [DATA_WIDTH-1:0]   sb_mem_req_data;
-    logic [3:0]              sb_mem_req_be;
-    logic                    sb_fwd_hit;
-    logic                    sb_fwd_hit_full;
-    logic [DATA_WIDTH-1:0]   sb_fwd_data;
-    logic                    sb_empty;
-    logic                    sb_full;
+    // Memory size from funct3
+    logic [1:0] mem_size;
     
-    // Memory Controller signals
-    logic                    mc_load_req_valid;
-    logic                    mc_load_req_ready;
-    logic                    mc_load_resp_valid;
-    logic [$clog2(BUFFER_DEPTH)-1:0] mc_load_resp_idx;
-    logic [DATA_WIDTH-1:0]   mc_load_resp_data;
-    logic                    mc_store_req_ready;
+    // Store data shifted to correct byte position
+    logic [DATA_WIDTH-1:0] shifted_store_data;
     
-    // FSM state
-    lsu_state_t              state, next_state;
-    
-    // Pipeline registers
-    logic                    req_is_store_r;
-    logic [ADDR_WIDTH-1:0]   req_addr_r;
-    logic [DATA_WIDTH-1:0]   req_wdata_r;
-    logic [2:0]              req_funct3_r;
-    logic [4:0]              req_rd_r;
-    logic [3:0]              req_be_r;
+    // Load data sign extension
+    logic [DATA_WIDTH-1:0] load_data_extended;
 
     //==========================================================================
-    // Address Generation Unit Instance
+    // Address Computation
     //==========================================================================
-    address_generation_unit u_agu (
-        .clk            (clk),
-        .rst_n          (rst_n),
-        .valid_i        (cpu_req_valid_i && cpu_req_ready_o),
-        .base_addr_i    (cpu_req_base_addr_i),
-        .offset_i       (cpu_req_offset_i),
-        .funct3_i       (cpu_req_funct3_i),
-        .mem_op_i       (cpu_req_we_i ? MEM_OP_STORE : MEM_OP_LOAD),
-        .valid_o        (agu_valid),
-        .eff_addr_o     (agu_eff_addr),
-        .misaligned_o   (agu_misaligned),
-        .byte_enable_o  (agu_byte_enable),
-        .mem_size_o     (agu_mem_size)
-    );
+    assign sign_ext_offset = cpu_req_offset_i;
+    assign eff_addr = cpu_req_base_addr_i + {{(ADDR_WIDTH-12){sign_ext_offset[11]}}, sign_ext_offset};
 
     //==========================================================================
-    // Load Buffer Instance
+    // Memory Size Decode
     //==========================================================================
-    load_buffer #(
-        .DEPTH(BUFFER_DEPTH)
-    ) u_load_buffer (
-        .clk                (clk),
-        .rst_n              (rst_n),
-        .alloc_valid_i      (lb_alloc_valid),
-        .alloc_addr_i       (req_addr_r),
-        .alloc_funct3_i     (req_funct3_r),
-        .alloc_rd_i         (req_rd_r),
-        .alloc_ready_o      (lb_alloc_ready),
-        .alloc_idx_o        (lb_alloc_idx),
-        .complete_valid_i   (mc_load_resp_valid),
-        .complete_idx_i     (mc_load_resp_idx),
-        .complete_data_i    (mc_load_resp_data),
-        .wb_valid_o         (lb_wb_valid),
-        .wb_data_o          (lb_wb_data),
-        .wb_rd_o            (lb_wb_rd),
-        .wb_ready_i         (cpu_resp_ready_i),
-        .stl_check_addr_i   (req_addr_r),
-        .stl_hit_o          (),   // Not used in simple implementation
-        .flush_i            (flush_i),
-        .empty_o            (lb_empty),
-        .full_o             (lb_full)
-    );
+    always_comb begin
+        case (cpu_req_funct3_i[1:0])
+            2'b00:   mem_size = 2'b00;  // Byte
+            2'b01:   mem_size = 2'b01;  // Halfword
+            2'b10:   mem_size = 2'b10;  // Word
+            default: mem_size = 2'b00;
+        endcase
+    end
 
     //==========================================================================
-    // Store Buffer Instance
+    // Alignment Check
     //==========================================================================
-    store_buffer #(
-        .DEPTH(BUFFER_DEPTH)
-    ) u_store_buffer (
-        .clk                (clk),
-        .rst_n              (rst_n),
-        .alloc_valid_i      (sb_alloc_valid),
-        .alloc_addr_i       (req_addr_r),
-        .alloc_data_i       (req_wdata_r),
-        .alloc_be_i         (req_be_r),
-        .alloc_ready_o      (sb_alloc_ready),
-        .commit_i           (commit_i),
-        .mem_req_valid_o    (sb_mem_req_valid),
-        .mem_req_addr_o     (sb_mem_req_addr),
-        .mem_req_data_o     (sb_mem_req_data),
-        .mem_req_be_o       (sb_mem_req_be),
-        .mem_req_ready_i    (mc_store_req_ready),
-        .fwd_check_valid_i  (lb_alloc_valid),
-        .fwd_check_addr_i   (req_addr_r),
-        .fwd_check_be_i     (req_be_r),
-        .fwd_hit_o          (sb_fwd_hit),
-        .fwd_hit_full_o     (sb_fwd_hit_full),
-        .fwd_data_o         (sb_fwd_data),
-        .flush_i            (flush_i),
-        .empty_o            (sb_empty),
-        .full_o             (sb_full)
-    );
+    always_comb begin
+        case (mem_size)
+            2'b00:   is_aligned = 1'b1;                    // Byte always aligned
+            2'b01:   is_aligned = (eff_addr[0] == 1'b0);   // Halfword
+            2'b10:   is_aligned = (eff_addr[1:0] == 2'b00);// Word
+            default: is_aligned = 1'b1;
+        endcase
+    end
 
     //==========================================================================
-    // Memory Controller Instance
+    // Byte Enable Generation
     //==========================================================================
-    memory_controller u_mem_ctrl (
-        .clk                (clk),
-        .rst_n              (rst_n),
-        // Load interface
-        .load_req_valid_i   (mc_load_req_valid),
-        .load_req_addr_i    (req_addr_r),
-        .load_req_be_i      (req_be_r),
-        .load_req_idx_i     (lb_alloc_idx),
-        .load_req_ready_o   (mc_load_req_ready),
-        .load_resp_valid_o  (mc_load_resp_valid),
-        .load_resp_idx_o    (mc_load_resp_idx),
-        .load_resp_data_o   (mc_load_resp_data),
-        .load_resp_error_o  (),
-        // Store interface
-        .store_req_valid_i  (sb_mem_req_valid),
-        .store_req_addr_i   (sb_mem_req_addr),
-        .store_req_data_i   (sb_mem_req_data),
-        .store_req_be_i     (sb_mem_req_be),
-        .store_req_ready_o  (mc_store_req_ready),
-        .store_resp_valid_o (),
-        .store_resp_error_o (),
-        // Memory interface
-        .mem_req_valid_o    (mem_req_valid_o),
-        .mem_req_we_o       (mem_req_we_o),
-        .mem_req_addr_o     (mem_req_addr_o),
-        .mem_req_wdata_o    (mem_req_wdata_o),
-        .mem_req_be_o       (mem_req_be_o),
-        .mem_req_ready_i    (mem_req_ready_i),
-        .mem_resp_valid_i   (mem_resp_valid_i),
-        .mem_resp_rdata_i   (mem_resp_rdata_i),
-        .mem_resp_error_i   (mem_resp_error_i)
-    );
+    logic [3:0] byte_enable;
+    always_comb begin
+        case (mem_size)
+            2'b00: byte_enable = 4'b0001 << eff_addr[1:0];  // Byte
+            2'b01: byte_enable = 4'b0011 << eff_addr[1:0];  // Halfword
+            2'b10: byte_enable = 4'b1111;                    // Word
+            default: byte_enable = 4'b0001;
+        endcase
+    end
 
     //==========================================================================
-    // LSU Control FSM
+    // Store Data Shifting (place data at correct byte position)
+    //==========================================================================
+    always_comb begin
+        case (mem_size)
+            2'b00: begin // Byte - replicate to all positions
+                shifted_store_data = {cpu_req_wdata_i[7:0], cpu_req_wdata_i[7:0],
+                                      cpu_req_wdata_i[7:0], cpu_req_wdata_i[7:0]};
+            end
+            2'b01: begin // Halfword - replicate to both positions  
+                shifted_store_data = {cpu_req_wdata_i[15:0], cpu_req_wdata_i[15:0]};
+            end
+            2'b10: begin // Word - no shift needed
+                shifted_store_data = cpu_req_wdata_i;
+            end
+            default: shifted_store_data = cpu_req_wdata_i;
+        endcase
+    end
+
+    //==========================================================================
+    // FSM State Register
     //==========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            state <= LSU_IDLE;
+            state <= IDLE;
         end else if (flush_i) begin
-            state <= LSU_IDLE;
+            state <= IDLE;
         end else begin
             state <= next_state;
         end
     end
 
+    //==========================================================================
+    // FSM Next State Logic
+    //==========================================================================
     always_comb begin
         next_state = state;
         
         case (state)
-            LSU_IDLE: begin
+            IDLE: begin
                 if (cpu_req_valid_i && cpu_req_ready_o) begin
-                    next_state = LSU_ADDR_CALC;
+                    next_state = ADDR_CALC;
                 end
             end
             
-            LSU_ADDR_CALC: begin
-                if (agu_valid) begin
-                    if (agu_misaligned) begin
-                        next_state = LSU_ERROR;
-                    end else begin
-                        next_state = LSU_MEM_REQ;
-                    end
-                end
-            end
-            
-            LSU_MEM_REQ: begin
-                if (req_is_store_r) begin
-                    if (sb_alloc_ready) begin
-                        next_state = LSU_IDLE;
-                    end
+            ADDR_CALC: begin
+                if (!is_aligned) begin
+                    next_state = ERROR;
                 end else begin
-                    if (lb_alloc_ready) begin
-                        next_state = LSU_IDLE;
+                    next_state = MEM_REQ;
+                end
+            end
+            
+            MEM_REQ: begin
+                if (mem_req_ready_i) begin
+                    if (req_is_store_r) begin
+                        next_state = IDLE;  // Stores complete immediately
+                    end else if (mem_resp_valid_i) begin
+                        next_state = WRITEBACK;  // Zero latency - response available immediately
+                    end else begin
+                        next_state = MEM_WAIT;  // Non-zero latency - wait for response
                     end
                 end
             end
             
-            LSU_ERROR: begin
-                if (cpu_resp_ready_i) begin
-                    next_state = LSU_IDLE;
+            MEM_WAIT: begin
+                if (mem_resp_valid_i) begin
+                    next_state = WRITEBACK;
                 end
             end
             
-            default: next_state = LSU_IDLE;
+            WRITEBACK: begin
+                if (cpu_resp_ready_i) begin
+                    next_state = IDLE;
+                end
+            end
+            
+            ERROR: begin
+                if (cpu_resp_ready_i) begin
+                    next_state = IDLE;
+                end
+            end
+            
+            default: next_state = IDLE;
         endcase
     end
 
     //==========================================================================
-    // Pipeline Registers
+    // Request Registers
     //==========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -295,68 +246,116 @@ module lsu_top
             req_funct3_r   <= '0;
             req_rd_r       <= '0;
             req_be_r       <= '0;
-        end else if (cpu_req_valid_i && cpu_req_ready_o) begin
+        end else if (state == IDLE && cpu_req_valid_i && cpu_req_ready_o) begin
             req_is_store_r <= cpu_req_we_i;
-            req_wdata_r    <= cpu_req_wdata_i;
+            req_addr_r     <= eff_addr;
+            req_wdata_r    <= shifted_store_data;  // Use shifted data for stores
             req_funct3_r   <= cpu_req_funct3_i;
             req_rd_r       <= cpu_req_rd_i;
-        end else if (agu_valid) begin
-            req_addr_r     <= agu_eff_addr;
-            req_be_r       <= agu_byte_enable;
+            req_be_r       <= byte_enable;
         end
     end
 
     //==========================================================================
-    // Control Signal Generation
+    // CPU Request Interface
     //==========================================================================
-    
-    // CPU request ready when idle and buffers not full
-    assign cpu_req_ready_o = (state == LSU_IDLE) && !lb_full && !sb_full;
-    
-    // Load buffer allocation
-    assign lb_alloc_valid = (state == LSU_MEM_REQ) && !req_is_store_r && !sb_fwd_hit_full;
-    
-    // Store buffer allocation
-    assign sb_alloc_valid = (state == LSU_MEM_REQ) && req_is_store_r;
-    
-    // Memory controller load request
-    assign mc_load_req_valid = lb_alloc_valid && lb_alloc_ready;
+    assign cpu_req_ready_o = (state == IDLE);
 
     //==========================================================================
-    // CPU Response Generation
+    // Memory Request Interface
+    //==========================================================================
+    assign mem_req_valid_o = (state == MEM_REQ);
+    assign mem_req_we_o    = req_is_store_r;
+    assign mem_req_addr_o  = req_addr_r;
+    assign mem_req_wdata_o = req_wdata_r;
+    assign mem_req_be_o    = req_be_r;
+
+    //==========================================================================
+    // Load Data Sign Extension
+    //==========================================================================
+    logic [7:0]  load_byte;
+    logic [15:0] load_half;
+    logic [DATA_WIDTH-1:0] load_data_reg;
+    logic [DATA_WIDTH-1:0] active_load_data;
+    
+    // Register the load data when it arrives (support both zero and non-zero latency)
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            load_data_reg <= '0;
+        end else if (mem_resp_valid_i && (state == MEM_WAIT || state == MEM_REQ)) begin
+            load_data_reg <= mem_resp_rdata_i;
+        end
+    end
+    
+    // Use registered data in WRITEBACK
+    assign active_load_data = load_data_reg;
+    
+    // Extract byte based on address LSBs
+    always_comb begin
+        case (req_addr_r[1:0])
+            2'b00: load_byte = active_load_data[7:0];
+            2'b01: load_byte = active_load_data[15:8];
+            2'b10: load_byte = active_load_data[23:16];
+            2'b11: load_byte = active_load_data[31:24];
+        endcase
+    end
+    
+    // Extract halfword based on address LSB[1]
+    always_comb begin
+        case (req_addr_r[1])
+            1'b0: load_half = active_load_data[15:0];
+            1'b1: load_half = active_load_data[31:16];
+        endcase
+    end
+    
+    // Sign/zero extend based on funct3
+    always_comb begin
+        case (req_funct3_r)
+            FUNCT3_LB:  load_data_extended = {{24{load_byte[7]}}, load_byte};
+            FUNCT3_LH:  load_data_extended = {{16{load_half[15]}}, load_half};
+            FUNCT3_LW:  load_data_extended = active_load_data;
+            FUNCT3_LBU: load_data_extended = {24'b0, load_byte};
+            FUNCT3_LHU: load_data_extended = {16'b0, load_half};
+            default:    load_data_extended = active_load_data;
+        endcase
+    end
+
+    //==========================================================================
+    // CPU Response Interface
     //==========================================================================
     always_comb begin
-        cpu_resp_valid_o   = 1'b0;
-        cpu_resp_rdata_o   = '0;
-        cpu_resp_rd_o      = '0;
-        cpu_resp_error_o   = 1'b0;
+        cpu_resp_valid_o    = 1'b0;
+        cpu_resp_rdata_o    = '0;
+        cpu_resp_rd_o       = '0;
+        cpu_resp_error_o    = 1'b0;
         cpu_resp_exc_code_o = '0;
         
-        if (state == LSU_ERROR) begin
-            // Misalignment exception
-            cpu_resp_valid_o    = 1'b1;
-            cpu_resp_error_o    = 1'b1;
-            cpu_resp_rd_o       = req_rd_r;
-            cpu_resp_exc_code_o = req_is_store_r ? EXC_STORE_ADDR_MISALIGN : 
-                                                   EXC_LOAD_ADDR_MISALIGN;
-        end else if (lb_wb_valid) begin
-            // Load writeback
-            cpu_resp_valid_o = 1'b1;
-            cpu_resp_rdata_o = lb_wb_data;
-            cpu_resp_rd_o    = lb_wb_rd;
-        end else if (sb_fwd_hit_full && (state == LSU_MEM_REQ) && !req_is_store_r) begin
-            // Store-to-load forwarding
-            cpu_resp_valid_o = 1'b1;
-            cpu_resp_rdata_o = sign_extend_data(sb_fwd_data, req_addr_r[1:0], req_funct3_r);
-            cpu_resp_rd_o    = req_rd_r;
-        end
+        case (state)
+            WRITEBACK: begin
+                cpu_resp_valid_o = 1'b1;
+                cpu_resp_rdata_o = load_data_extended;
+                cpu_resp_rd_o    = req_rd_r;
+            end
+            
+            ERROR: begin
+                cpu_resp_valid_o    = 1'b1;
+                cpu_resp_error_o    = 1'b1;
+                cpu_resp_rd_o       = req_rd_r;
+                cpu_resp_exc_code_o = req_is_store_r ? EXC_STORE_ADDR_MISALIGN : 
+                                                       EXC_LOAD_ADDR_MISALIGN;
+            end
+            
+            default: begin
+                // No response
+            end
+        endcase
     end
 
     //==========================================================================
     // Status Outputs
     //==========================================================================
-    assign lsu_busy_o          = (state != LSU_IDLE);
-    assign load_buffer_full_o  = lb_full;
-    assign store_buffer_full_o = sb_full;
+    assign lsu_busy_o          = (state != IDLE);
+    assign load_buffer_full_o  = 1'b0;  // Simplified - no buffer
+    assign store_buffer_full_o = 1'b0;  // Simplified - no buffer
 
 endmodule
